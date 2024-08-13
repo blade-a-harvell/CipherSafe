@@ -7,10 +7,12 @@ from cryptography.hazmat.primitives.asymmetric import rsa, padding as rsa_paddin
 from cryptography.hazmat.primitives import serialization
 from datetime import datetime
 import os
-import base64  # Importing base64 module for encoding/decoding
+import base64
 import json
 import logging
-import pyperclip  # For copying to clipboard
+import pyperclip
+import secrets
+import string
 
 # Configure logging
 logging.basicConfig(filename='ciphersafe.log', level=logging.INFO,
@@ -218,15 +220,18 @@ def update_account_buttons():
 
     cursor.execute('SELECT id, account, username, last_used FROM passwords')
     records = cursor.fetchall()
-    
-    for record in records:
+
+    max_columns = 2  # Number of columns in the grid layout
+    for index, record in enumerate(records):
         id_, account, username, last_used = record
         last_used_display = calculate_time_since(last_used)
 
         button_text = f"{account}\n{username}\nLast Used: {last_used_display}"
         button = ctk.CTkButton(tab_accounts, text=button_text, 
                                command=lambda account=account: view_account_password(account))
-        button.pack(pady=5, padx=10, fill='x')
+        row = index // max_columns
+        column = index % max_columns
+        button.grid(row=row, column=column, padx=10, pady=10, sticky='nsew')
 
 # View the password for a selected account
 def view_account_password(account):
@@ -234,8 +239,8 @@ def view_account_password(account):
     if entered_password is None:
         return
     if verify_master_password(entered_password):
-        cursor.execute('SELECT password FROM passwords WHERE account = ?', (account,))
-        encrypted_data_str = cursor.fetchone()[0]
+        cursor.execute('SELECT id, password FROM passwords WHERE account = ?', (account,))
+        id_, encrypted_data_str = cursor.fetchone()
         encrypted_data = json.loads(encrypted_data_str)
         try:
             password = decrypt_password(encrypted_data)
@@ -246,6 +251,17 @@ def view_account_password(account):
         # Create a pop-up to show password with copy and toggle options
         view_password_window = ctk.CTkToplevel()
         view_password_window.title(f"Password for {account}")
+
+        # Add delete button
+        def delete_account():
+            cursor.execute('DELETE FROM passwords WHERE id = ?', (id_,))
+            conn.commit()
+            update_account_buttons()
+            view_password_window.destroy()
+            custom_message_box("Deleted", f"Account '{account}' deleted successfully.")
+
+        delete_button = ctk.CTkButton(view_password_window, text="🗑️ Delete", command=delete_account, width=20)
+        delete_button.pack(anchor='ne', padx=5, pady=5)
 
         label_account = ctk.CTkLabel(view_password_window, text=f"Account: {account}", font=('Arial', 14))
         label_account.pack(pady=10)
@@ -290,6 +306,13 @@ def toggle_password_visibility(label, password, show):
         label.configure(text=password)
     else:
         label.configure(text='*' * len(password))
+
+# Function to generate a random password
+def generate_random_password(length=12):
+    characters = string.ascii_letters + string.digits + string.punctuation
+    password = ''.join(secrets.choice(characters) for _ in range(length))
+    entry_password.delete(0, ctk.END)
+    entry_password.insert(0, password)
 
 # Custom message box function
 def custom_message_box(title, message):
@@ -370,8 +393,25 @@ def main_app():
     entry_password = ctk.CTkEntry(tab_add, show='*', placeholder_text='Enter password')
     entry_password.pack(pady=5, fill='x')
 
+    button_generate = ctk.CTkButton(tab_add, text='Generate Random Password', command=generate_random_password)
+    button_generate.pack(pady=5)
+
     button_add = ctk.CTkButton(tab_add, text='Add Password', command=add_password)
     button_add.pack(pady=10)
+
+    # Set up tab change to refresh accounts
+    def on_tab_change():
+        current_tab = tab_view.get()
+        if current_tab == "Accounts":
+            update_account_buttons()
+
+    # Override tab select to check for tab changes
+    original_tab_view_set = tab_view.set
+    def tab_view_set_override(*args, **kwargs):
+        result = original_tab_view_set(*args, **kwargs)
+        on_tab_change()
+        return result
+    tab_view.set = tab_view_set_override
 
     update_account_buttons()
 
